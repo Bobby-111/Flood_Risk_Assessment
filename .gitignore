@@ -1,12 +1,8 @@
 # ── Secrets ──────────────────────────────────────────────────────────
 .env
 
-# ── Large data files (share via Google Drive / link in README) ───────
-*.csv
+# ── Large video file (source asset, not needed to run the app) ──────
 *.mp4
-
-# ── Generated frame images ────────────────────────────────────────────
-assets/frames/
 
 # ── Python cache ──────────────────────────────────────────────────────
 __pycache__/
