@@ -64,30 +64,34 @@ MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 
 # ── Load Data ─────────────────────────────────────────────────────
 df  = pd.read_csv("flood_predictions.csv")
+# Cleanly load data and delete large intermediate objects immediately to save RAM
 raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
-
 raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
 gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
 
+# Forces integers for date matching
 df["year"]   = df["year"].fillna(0).astype(int)
 df["month"]  = df["month"].fillna(0).astype(int)
 gdf["year"]  = gdf["year"].fillna(0).astype(int)
 gdf["month"] = gdf["month"].fillna(0).astype(int)
 
-# Use strings for grid_id to ensure perfect matching across all components
+# Use strings for grid_id to ensure perfect matching
 df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
-print(f"[INFO] geo_df rows: {len(geo_df)}")
-
-# ── PRE-GENERATE STATIC GEOJSON for the Map ───────────────
-# The geometries don't change, only the values. So we generate once.
-# We ensure the 'id' of each feature matches the 'grid_id' for px.choropleth.
+# ── PRE-GENERATE STATIC GEOJSON ───────────────
 static_gdf = gdf.drop_duplicates("grid_id").copy()
 static_gdf["id"] = static_gdf["grid_id"]
 STATIC_GEOJSON = json.loads(static_gdf.to_json())
-print(f"[INFO] STATIC_GEOJSON generated ({len(STATIC_GEOJSON['features'])} features)")
+
+# DELETE large geospatial objects to free 200MB+ RAM before Dash starts
+del raw
+del gdf
+del static_gdf
+import gc
+gc.collect()
+
+print(f"[INFO] Dataset loaded: {len(df)} rows. Memory cleaned.")
 
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
@@ -815,9 +819,11 @@ def update_map(year, month):
         )
         return fig
     except Exception as e:
-        print(f"Map Error: {e}")
+        import traceback
+        err = traceback.format_exc()
+        print(f"Map Error:\n{err}")
         return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                                     font=dict(color=TEXT), title=f"Error loading map"))
+                                     font=dict(color=TEXT), title=f"Map Error: {str(e)[:50]}"))
 
 
 # Monthly timeline
@@ -994,8 +1000,10 @@ def update_heatmap(year, month):
         ))
         return fig
     except Exception as e:
-        print(f"Heatmap Error: {e}")
-        return go.Figure(layout=L(title=f"Error loading heatmap"))
+        import traceback
+        err = traceback.format_exc()
+        print(f"Heatmap Error:\n{err}")
+        return go.Figure(layout=L(title=f"Heatmap Error: {str(e)[:50]}"))
 
 
 # Feature importance bar
