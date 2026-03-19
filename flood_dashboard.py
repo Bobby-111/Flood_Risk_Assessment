@@ -119,7 +119,10 @@ def L(**overrides):
     return {**CHART_LAYOUT, **overrides}
 
 # ── App ────────────────────────────────────────────────────────────
-app = dash.Dash(__name__)
+app = dash.Dash(
+    __name__,
+    serve_locally=True  # Forces Dash to serve Plotly.js from the server instead of a CDN
+)
 server = app.server
 
 app.index_string = '''
