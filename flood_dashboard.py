@@ -1,7 +1,5 @@
 import pandas as pd
-import geopandas as gpd
 import json
-from shapely.geometry import shape
 
 import dash
 from dash import dcc, html, dash_table
@@ -66,19 +64,30 @@ MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 df  = pd.read_csv("flood_predictions.csv")
 raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
 
-raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
-gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
+# Clean types for merging/filtering
+df["year"]    = df["year"].astype(int)
+df["month"]   = df["month"].astype(int)
+df["grid_id"] = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-df["year"]   = df["year"].astype(int)
-df["month"]  = df["month"].astype(int)
-gdf["year"]  = gdf["year"].astype(int)
-gdf["month"] = gdf["month"].astype(int)
+# ── PRE-PROCESS GRID GEOMETRIES (GeoJSON vs GeoDataFrame) ──────────
+# We only need 538 unique grid shapes, not 58,000 duplicates!
+# This avoids Geopandas/GDAL dependencies and saves ~100MB RAM.
+raw_grids = raw.drop_duplicates("grid_id").copy()
+raw_grids["grid_id"] = raw_grids["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
-gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
+features = []
+for _, row in raw_grids.iterrows():
+    features.append({
+        "type": "Feature",
+        "id": row["grid_id"],
+        "geometry": json.loads(row[".geo"]),
+        "properties": {"grid_id": row["grid_id"]}
+    })
+GRIDS_GEOJSON = {"type": "FeatureCollection", "features": features}
 
-geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
-print(f"[INFO] geo_df rows: {len(geo_df)}")
+# Clear raw from memory as we only need df now
+del raw
+del raw_grids
 
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
@@ -773,22 +782,21 @@ def update_kpis(year, month):
 )
 def update_map(year, month):
     year, month = int(year), int(month)
-    dff = geo_df[(geo_df.year == year) & (geo_df.month == month)].reset_index(drop=True)
+    dff = df[(df.year == year) & (df.month == month)]
     if dff.empty:
         return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
                                      font=dict(color=TEXT)))
 
-    geojson = json.loads(dff.to_json())
     fig = px.choropleth_mapbox(
-        dff, geojson=geojson, locations=dff.index,
-        color="flood_probability", featureidkey="id",
+        dff, geojson=GRIDS_GEOJSON, locations="grid_id",
+        color="flood_probability",
         mapbox_style="carto-darkmatter",
         center={"lat": 16.7, "lon": 82.0}, zoom=8,
         opacity=0.8,
         color_continuous_scale="YlOrRd",
         range_color=[0, 1],
-        hover_data={"flood_probability": ":.2%",
-                    "rainfall_x": ":.1f", "elevation_x": ":.1f"}
+        hover_data={"flood_probability": ":.2%", "grid_id": True,
+                    "rainfall": ":.1f", "elevation": ":.1f"}
     )
     fig.update_layout(
         margin={"r":0,"t":0,"l":0,"b":0},
