@@ -111,6 +111,7 @@ def L(**overrides):
 
 # ── App ────────────────────────────────────────────────────────────
 app = dash.Dash(__name__)
+server = app.server
 
 app.index_string = '''
 <!DOCTYPE html>
