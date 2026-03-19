@@ -1,5 +1,7 @@
 import pandas as pd
+import geopandas as gpd
 import json
+from shapely.geometry import shape
 
 import dash
 from dash import dcc, html, dash_table
@@ -64,30 +66,19 @@ MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 df  = pd.read_csv("flood_predictions.csv")
 raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
 
-# Clean types for merging/filtering
-df["year"]    = df["year"].astype(int)
-df["month"]   = df["month"].astype(int)
-df["grid_id"] = df["grid_id"].astype(str).str.replace(",", "", regex=False)
+raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
+gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
 
-# ── PRE-PROCESS GRID GEOMETRIES (GeoJSON vs GeoDataFrame) ──────────
-# We only need 538 unique grid shapes, not 58,000 duplicates!
-# This avoids Geopandas/GDAL dependencies and saves ~100MB RAM.
-raw_grids = raw.drop_duplicates("grid_id").copy()
-raw_grids["grid_id"] = raw_grids["grid_id"].astype(str).str.replace(",", "", regex=False)
+df["year"]   = df["year"].astype(int)
+df["month"]  = df["month"].astype(int)
+gdf["year"]  = gdf["year"].astype(int)
+gdf["month"] = gdf["month"].astype(int)
 
-features = []
-for _, row in raw_grids.iterrows():
-    features.append({
-        "type": "Feature",
-        "id": row["grid_id"],
-        "geometry": json.loads(row[".geo"]),
-        "properties": {"grid_id": row["grid_id"]}
-    })
-GRIDS_GEOJSON = {"type": "FeatureCollection", "features": features}
+df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
+gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-# Clear raw from memory as we only need df now
-del raw
-del raw_grids
+geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
+print(f"[INFO] geo_df rows: {len(geo_df)}")
 
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
@@ -782,21 +773,22 @@ def update_kpis(year, month):
 )
 def update_map(year, month):
     year, month = int(year), int(month)
-    dff = df[(df.year == year) & (df.month == month)]
+    dff = geo_df[(geo_df.year == year) & (geo_df.month == month)].reset_index(drop=True)
     if dff.empty:
         return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
                                      font=dict(color=TEXT)))
 
+    geojson = json.loads(dff.to_json())
     fig = px.choropleth_mapbox(
-        dff, geojson=GRIDS_GEOJSON, locations="grid_id",
-        color="flood_probability",
+        dff, geojson=geojson, locations=dff.index,
+        color="flood_probability", featureidkey="id",
         mapbox_style="carto-darkmatter",
         center={"lat": 16.7, "lon": 82.0}, zoom=8,
         opacity=0.8,
         color_continuous_scale="YlOrRd",
         range_color=[0, 1],
-        hover_data={"flood_probability": ":.2%", "grid_id": True,
-                    "rainfall": ":.1f", "elevation": ":.1f"}
+        hover_data={"flood_probability": ":.2%",
+                    "rainfall_x": ":.1f", "elevation_x": ":.1f"}
     )
     fig.update_layout(
         margin={"r":0,"t":0,"l":0,"b":0},
@@ -896,34 +888,37 @@ def update_yoy(year, month):
     Input("month", "value")
 )
 def update_scatter(year, month):
-    year, month = int(year), int(month)
-    dff = df[(df.year == year) & (df.month == month)].copy()
-    if dff.empty:
-        return go.Figure(layout=L(title="No data"))
+    try:
+        year, month = int(year), int(month)
+        dff = df[(df.year == year) & (df.month == month)].copy()
+        if dff.empty:
+            return go.Figure(layout=L(title="No data available for this selection"))
 
-    bins   = [0, 0.4, 0.7, 1.0]
-    labels = ["Low", "Medium", "High"]
-    # astype(str) avoids Categorical dtype crashing plotly trendline grouping
-    dff["risk"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
+        bins   = [0, 0.4, 0.7, 1.0]
+        labels = ["Low", "Medium", "High"]
+        dff["risk"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
 
-    color_map = {"Low": GREEN, "Medium": AMBER, "High": RED}
+        color_map = {"Low": GREEN, "Medium": AMBER, "High": RED}
 
-    fig = px.scatter(
-        dff, x="rainfall", y="flood_probability",
-        color="risk", color_discrete_map=color_map,
-        opacity=0.55, size_max=6,
-        labels={"rainfall": "Rainfall (mm)", "flood_probability": "Flood Probability",
-                "risk": "Risk Level"},
-        trendline="lowess", trendline_scope="overall",
-        trendline_color_override=ACCENT
-    )
-    mn = MONTH_NAMES.get(month, str(month))
-    fig.update_layout(**L(
-        yaxis=dict(tickformat=".0%", **AXIS),
-        xaxis=AXIS,
-        title=f"Rainfall vs Risk — {mn} {year}"
-    ))
-    return fig
+        fig = px.scatter(
+            dff, x="rainfall", y="flood_probability",
+            color="risk", color_discrete_map=color_map,
+            opacity=0.55, size_max=6,
+            labels={"rainfall": "Rainfall (mm)", "flood_probability": "Flood Probability",
+                    "risk": "Risk Level"},
+            trendline="lowess", trendline_scope="overall",
+            trendline_color_override=ACCENT
+        )
+        mn = MONTH_NAMES.get(month, str(month))
+        fig.update_layout(**L(
+            yaxis=dict(tickformat=".0%", **AXIS),
+            xaxis=AXIS,
+            title=f"Rainfall vs Risk — {mn} {year}"
+        ))
+        return fig
+    except Exception as e:
+        print(f"Scatter Plot Error: {e}")
+        return go.Figure(layout=L(title=f"Error loading scatter plot"))
 
 
 # Calendar heatmap
@@ -933,48 +928,58 @@ def update_scatter(year, month):
     Input("month", "value")
 )
 def update_heatmap(year, month):
-    year, month = int(year), int(month)
-    pivot = (df.groupby(["year","month"])["flood_probability"]
-               .mean()
-               .reset_index()
-               .pivot(index="month", columns="year", values="flood_probability"))
-    pivot.index = [MONTH_NAMES[m] for m in pivot.index]
-    pivot = pivot.reindex(MONTH_ORDER)
+    try:
+        year, month = int(year), int(month)
+        # Pre-sum/mean to reduce memory during pivot
+        agg_df = df.groupby(["year","month"])["flood_probability"].mean().reset_index()
+        if agg_df.empty:
+            return go.Figure(layout=L(title="No historical data available"))
 
-    fig = go.Figure(go.Heatmap(
-        z=pivot.values,
-        x=[str(c) for c in pivot.columns],
-        y=pivot.index,
-        colorscale="YlOrRd",
-        zmin=0, zmax=1,
-        text=[[f"{v:.0%}" if not pd.isna(v) else "" for v in row] for row in pivot.values],
-        texttemplate="%{text}",
-        textfont=dict(size=10, color="black"),  # Black text for better contrast on yellow/orange
-        hovertemplate="Year: %{x}<br>Month: %{y}<br>Avg Risk: %{z:.2%}<extra></extra>",
-        colorbar=dict(
-            tickformat=".0%", bgcolor="rgba(0,0,0,0)",
-            tickfont=dict(color=TEXT_PLT), titlefont=dict(color=TEXT_PLT), title="Risk"
-        )
-    ))
+        pivot = agg_df.pivot(index="month", columns="year", values="flood_probability")
+        
+        # Map indices to names
+        pivot.index = [MONTH_NAMES.get(m, str(m)) for m in pivot.index]
+        pivot = pivot.reindex(MONTH_ORDER)
 
-    # Highlight selected cell with a rectangle shape
-    if str(year) in [str(c) for c in pivot.columns] and MONTH_NAMES.get(month) in pivot.index:
-        x_idx = [str(c) for c in pivot.columns].index(str(year))
-        y_idx = list(pivot.index).index(MONTH_NAMES[month])
-        fig.add_shape(
-            type="rect",
-            xref="x", yref="y",
-            x0=x_idx - 0.5, x1=x_idx + 0.5,
-            y0=y_idx - 0.5, y1=y_idx + 0.5,
-            line=dict(color=ACCENT, width=3)
-        )
+        fig = go.Figure(go.Heatmap(
+            z=pivot.values,
+            x=[str(c) for c in pivot.columns],
+            y=pivot.index,
+            colorscale="YlOrRd",
+            zmin=0, zmax=1,
+            text=[[f"{v:.0%}" if not pd.isna(v) else "" for v in row] for row in pivot.values],
+            texttemplate="%{text}",
+            textfont=dict(size=10, color="black"),
+            hovertemplate="Year: %{x}<br>Month: %{y}<br>Avg Risk: %{z:.2%}<extra></extra>",
+            colorbar=dict(
+                tickformat=".0%", bgcolor="rgba(0,0,0,0)",
+                tickfont=dict(color=TEXT_PLT), titlefont=dict(color=TEXT_PLT), title="Risk"
+            )
+        ))
 
-    fig.update_layout(**L(
-        title="Historical Risk Heatmap",
-        xaxis=dict(side="bottom", **AXIS),
-        yaxis=dict(autorange="reversed", **AXIS)
-    ))
-    return fig
+        # Highlight selected cell safely
+        mn_label = MONTH_NAMES.get(month)
+        years_list = [str(c) for c in pivot.columns]
+        if mn_label in pivot.index and str(year) in years_list:
+            x_idx = years_list.index(str(year))
+            y_idx = list(pivot.index).index(mn_label)
+            fig.add_shape(
+                type="rect",
+                xref="x", yref="y",
+                x0=x_idx - 0.5, x1=x_idx + 0.5,
+                y0=y_idx - 0.5, y1=y_idx + 0.5,
+                line=dict(color=ACCENT, width=3)
+            )
+
+        fig.update_layout(**L(
+            title="Historical Risk Heatmap",
+            xaxis=dict(side="bottom", **AXIS),
+            yaxis=dict(autorange="reversed", **AXIS)
+        ))
+        return fig
+    except Exception as e:
+        print(f"Heatmap Error: {e}")
+        return go.Figure(layout=L(title=f"Error loading heatmap"))
 
 
 # Feature importance bar
