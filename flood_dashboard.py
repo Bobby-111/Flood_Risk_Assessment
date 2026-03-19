@@ -27,7 +27,40 @@ if GEMINI_API_KEY:
 else:
     print("Gemini API Key missing. AI insights will use fallback logic.")
 
-# (Redundant definitions removed - using the ones below at line 100)
+# ── Palette & Layout ──────────────────────────────────────────────
+BG       = "#0f1117"
+CARD_BG  = "#1a1d27"
+BORDER   = "#2a2d3e"
+ACCENT   = "#4f8ef7"
+RED      = "#ef4444"
+AMBER    = "#f59e0b"
+GREEN    = "#10b981"
+BLUE     = "#3b82f6"
+TEXT     = "#e2e8f0"
+SUBTEXT  = "#94a3b8"
+
+# Plotly specific colors (for charts)
+CARD_PLOT  = "#0d0d0d"
+BORDER_PLT = "#1e1e1e"
+TEXT_PLT   = "#f5f5f7"
+SUB_PLT    = "#6e6e73"
+
+CHART_LAYOUT = dict(
+    paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
+    font=dict(color=TEXT_PLT, family="Inter, -apple-system, sans-serif", size=12),
+    title_font=dict(size=13, color=TEXT_PLT, family="Inter"),
+    margin=dict(t=44, b=32, l=44, r=16),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUB_PLT))
+)
+
+AXIS = dict(gridcolor=BORDER_PLT, zerolinecolor=BORDER_PLT, color=SUB_PLT)
+
+def L(**overrides):
+    # Corrected title format to use dict(text=...) for better Plotly compatibility
+    l = {**CHART_LAYOUT, **overrides}
+    if "title" in l and isinstance(l["title"], str):
+        l["title"] = dict(text=l["title"])
+    return l
 
 
 MONTH_NAMES = {
@@ -73,28 +106,7 @@ FEATURES = ["rainfall", "soil_moisture", "elevation",
 YEARS  = sorted(df.year.unique())
 MONTHS = sorted(df.month.unique())
 
-# ── Palette (used in Plotly charts only) ──────────────────────────
-CHART_BG   = "rgba(0,0,0,0)"
-CARD_PLOT  = "#0d0d0d"
-BORDER_PLT = "#1e1e1e"
-TEXT_PLT   = "#f5f5f7"
-SUB_PLT    = "#6e6e73"
-AMBER      = "#f0a842"
-RED        = "#ef4444"
-GREEN      = "#10b981"
-BLUE       = "#3b82f6"
-
-CHART_LAYOUT = dict(
-    paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
-    font=dict(color=TEXT_PLT, family="Inter, -apple-system, sans-serif", size=12),
-    title_font=dict(size=13, color=TEXT_PLT, family="Inter"),
-    margin=dict(t=44, b=32, l=44, r=16),
-    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUB_PLT))
-)
-AXIS = dict(gridcolor=BORDER_PLT, zerolinecolor=BORDER_PLT, color=SUB_PLT)
-
-def L(**overrides):
-    return {**CHART_LAYOUT, **overrides}
+# (All shared constants & L() moved to top of file)
 
 # ── App ────────────────────────────────────────────────────────────
 app = dash.Dash(
