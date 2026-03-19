@@ -46,10 +46,10 @@ TEXT_PLT   = "#f5f5f7"
 SUB_PLT    = "#6e6e73"
 
 CHART_LAYOUT = dict(
-    paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
+    paper_bgcolor=CARD_PLOT,
     font=dict(color=TEXT_PLT, family="Inter, -apple-system, sans-serif", size=12),
-    title_font=dict(size=13, color=TEXT_PLT, family="Inter"),
-    margin=dict(t=44, b=32, l=44, r=16),
+    title_font=dict(size=14, color=TEXT_PLT),
+    margin=dict(t=48, b=36, l=48, r=16),
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUB_PLT))
 )
 
@@ -793,15 +793,13 @@ def update_map(year, month):
                         "rainfall": ":.1f", "elevation": ":.1f"}
         )
         fig.update_layout(
-            margin={"r":0,"t":0,"l":0,"b":0},
+            margin=dict(l=0, r=0, t=0, b=0),
             paper_bgcolor=CARD_PLOT,
             coloraxis=dict(
                 colorbar=dict(
-                    title="Flood Prob.",
+                    title=dict(text="Flood Prob.", font=dict(color=TEXT_PLT)),
                     tickformat=".0%",
-                    bgcolor=CARD_PLOT,
-                    tickfont=dict(color=TEXT_PLT),
-                    titlefont=dict(color=TEXT_PLT)
+                    tickfont=dict(color=TEXT_PLT)
                 )
             )
         )
@@ -811,8 +809,8 @@ def update_map(year, month):
         err = traceback.format_exc()
         print(f"Map Error:\n{err}")
         return go.Figure(layout=dict(
-            paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
-            font=dict(color=TEXT_PLT), title=dict(text=f"Map Error: {str(e)[:50]}")
+            paper_bgcolor=CARD_PLOT,
+            font=dict(color=TEXT_PLT), title=dict(text=f"Map Error: {str(e)[:40]}")
         ))
 
 
@@ -994,8 +992,8 @@ def update_heatmap(year, month):
         err = traceback.format_exc()
         print(f"Heatmap Error:\n{err}")
         return go.Figure(layout=dict(
-            paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
-            font=dict(color=TEXT_PLT), title=dict(text=f"Heatmap Error: {str(e)[:50]}")
+            paper_bgcolor=CARD_PLOT,
+            font=dict(color=TEXT_PLT), title=dict(text=f"Heatmap Error: {str(e)[:40]}")
         ))
 
 
