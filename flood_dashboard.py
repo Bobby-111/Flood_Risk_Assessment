@@ -69,11 +69,12 @@ raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
 raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
 gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
 
-df["year"]   = df["year"].astype(int)
-df["month"]  = df["month"].astype(int)
-gdf["year"]  = gdf["year"].astype(int)
-gdf["month"] = gdf["month"].astype(int)
+df["year"]   = df["year"].fillna(0).astype(int)
+df["month"]  = df["month"].fillna(0).astype(int)
+gdf["year"]  = gdf["year"].fillna(0).astype(int)
+gdf["month"] = gdf["month"].fillna(0).astype(int)
 
+# Use strings for grid_id to ensure perfect matching across all components
 df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 
@@ -789,7 +790,7 @@ def update_map(year, month):
 
         fig = px.choropleth_mapbox(
             dff, geojson=STATIC_GEOJSON, locations="grid_id",
-            color="flood_probability", featureidkey="properties.grid_id",
+            color="flood_probability", featureidkey="id",
             mapbox_style="carto-darkmatter",
             center={"lat": 16.7, "lon": 82.0}, zoom=8,
             opacity=0.8,
@@ -949,8 +950,8 @@ def update_heatmap(year, month):
 
         pivot = agg_df.pivot(index="month", columns="year", values="flood_probability")
         
-        # Map indices to names
-        pivot.index = [MONTH_NAMES.get(m, str(m)) for m in pivot.index]
+        # Map indices to names - cast to int first to ensure dictionary match
+        pivot.index = [MONTH_NAMES.get(int(m), str(m)) for m in pivot.index]
         pivot = pivot.reindex(MONTH_ORDER)
 
         fig = go.Figure(go.Heatmap(
