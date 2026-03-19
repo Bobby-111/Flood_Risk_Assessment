@@ -80,6 +80,14 @@ gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
 print(f"[INFO] geo_df rows: {len(geo_df)}")
 
+# ── PRE-GENERATE STATIC GEOJSON for the Map ───────────────
+# The geometries don't change, only the values. So we generate once.
+# We ensure the 'id' of each feature matches the 'grid_id' for px.choropleth.
+static_gdf = gdf.drop_duplicates("grid_id").copy()
+static_gdf["id"] = static_gdf["grid_id"]
+STATIC_GEOJSON = json.loads(static_gdf.to_json())
+print(f"[INFO] STATIC_GEOJSON generated ({len(STATIC_GEOJSON['features'])} features)")
+
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
 
@@ -772,36 +780,40 @@ def update_kpis(year, month):
     Input("month", "value")
 )
 def update_map(year, month):
-    year, month = int(year), int(month)
-    dff = geo_df[(geo_df.year == year) & (geo_df.month == month)].reset_index(drop=True)
-    if dff.empty:
-        return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                                     font=dict(color=TEXT)))
+    try:
+        year, month = int(year), int(month)
+        dff = df[(df.year == year) & (df.month == month)].copy()
+        if dff.empty:
+            return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                                         font=dict(color=TEXT), title="No data for this selection"))
 
-    geojson = json.loads(dff.to_json())
-    fig = px.choropleth_mapbox(
-        dff, geojson=geojson, locations=dff.index,
-        color="flood_probability", featureidkey="id",
-        mapbox_style="carto-darkmatter",
-        center={"lat": 16.7, "lon": 82.0}, zoom=8,
-        opacity=0.8,
-        color_continuous_scale="YlOrRd",
-        range_color=[0, 1],
-        hover_data={"flood_probability": ":.2%",
-                    "rainfall_x": ":.1f", "elevation_x": ":.1f"}
-    )
-    fig.update_layout(
-        margin={"r":0,"t":0,"l":0,"b":0},
-        paper_bgcolor=CARD_BG,
-        coloraxis_colorbar=dict(
-            title="Flood Prob.",
-            tickformat=".0%",
-            bgcolor=CARD_BG,
-            tickfont=dict(color=TEXT),
-            titlefont=dict(color=TEXT)
+        fig = px.choropleth_mapbox(
+            dff, geojson=STATIC_GEOJSON, locations="grid_id",
+            color="flood_probability", featureidkey="properties.grid_id",
+            mapbox_style="carto-darkmatter",
+            center={"lat": 16.7, "lon": 82.0}, zoom=8,
+            opacity=0.8,
+            color_continuous_scale="YlOrRd",
+            range_color=[0, 1],
+            hover_data={"flood_probability": ":.2%",
+                        "rainfall": ":.1f", "elevation": ":.1f"}
         )
-    )
-    return fig
+        fig.update_layout(
+            margin={"r":0,"t":0,"l":0,"b":0},
+            paper_bgcolor=CARD_BG,
+            coloraxis_colorbar=dict(
+                title="Flood Prob.",
+                tickformat=".0%",
+                bgcolor=CARD_BG,
+                tickfont=dict(color=TEXT),
+                titlefont=dict(color=TEXT)
+            )
+        )
+        return fig
+    except Exception as e:
+        print(f"Map Error: {e}")
+        return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                                     font=dict(color=TEXT), title=f"Error loading map"))
 
 
 # Monthly timeline
