@@ -27,33 +27,7 @@ if GEMINI_API_KEY:
 else:
     print("Gemini API Key missing. AI insights will use fallback logic.")
 
-# ── Palette ───────────────────────────────────────────────────────
-BG       = "#0f1117"
-CARD_BG  = "#1a1d27"
-BORDER   = "#2a2d3e"
-ACCENT   = "#4f8ef7"
-RED      = "#ef4444"
-AMBER    = "#f59e0b"
-GREEN    = "#10b981"
-TEXT     = "#e2e8f0"
-SUBTEXT  = "#94a3b8"
-
-# Base layout (NO xaxis/yaxis — those are overridden per chart to avoid
-# "got multiple values for keyword argument" TypeError when spreading **CHART_LAYOUT)
-CHART_LAYOUT = dict(
-    paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-    font=dict(color=TEXT, family="Inter, sans-serif", size=12),
-    title_font=dict(size=14, color=TEXT),
-    margin=dict(t=48, b=36, l=48, r=16),
-    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUBTEXT))
-)
-
-# Axis defaults reused in each chart
-AXIS = dict(gridcolor=BORDER, zerolinecolor=BORDER, color=TEXT)
-
-def L(**overrides):
-    """Merge CHART_LAYOUT with per-chart overrides safely."""
-    return {**CHART_LAYOUT, **overrides}
+# (Redundant definitions removed - using the ones below at line 100)
 
 
 MONTH_NAMES = {
@@ -808,13 +782,15 @@ def update_map(year, month):
         )
         fig.update_layout(
             margin={"r":0,"t":0,"l":0,"b":0},
-            paper_bgcolor=CARD_BG,
-            coloraxis_colorbar=dict(
-                title="Flood Prob.",
-                tickformat=".0%",
-                bgcolor=CARD_BG,
-                tickfont=dict(color=TEXT),
-                titlefont=dict(color=TEXT)
+            paper_bgcolor=CARD_PLOT,
+            coloraxis=dict(
+                colorbar=dict(
+                    title="Flood Prob.",
+                    tickformat=".0%",
+                    bgcolor=CARD_PLOT,
+                    tickfont=dict(color=TEXT_PLT),
+                    titlefont=dict(color=TEXT_PLT)
+                )
             )
         )
         return fig
@@ -822,8 +798,10 @@ def update_map(year, month):
         import traceback
         err = traceback.format_exc()
         print(f"Map Error:\n{err}")
-        return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                                     font=dict(color=TEXT), title=f"Map Error: {str(e)[:50]}"))
+        return go.Figure(layout=dict(
+            paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
+            font=dict(color=TEXT_PLT), title=dict(text=f"Map Error: {str(e)[:50]}")
+        ))
 
 
 # Monthly timeline
@@ -1003,7 +981,10 @@ def update_heatmap(year, month):
         import traceback
         err = traceback.format_exc()
         print(f"Heatmap Error:\n{err}")
-        return go.Figure(layout=L(title=f"Heatmap Error: {str(e)[:50]}"))
+        return go.Figure(layout=dict(
+            paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
+            font=dict(color=TEXT_PLT), title=dict(text=f"Heatmap Error: {str(e)[:50]}")
+        ))
 
 
 # Feature importance bar
