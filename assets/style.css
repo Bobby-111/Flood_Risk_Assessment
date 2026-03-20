@@ -373,7 +373,7 @@ body {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 16px;
   max-width: 1400px;
   margin: 0 auto;
@@ -684,19 +684,85 @@ body {
 }
 
 .js-plotly-plot {
-  animation: chartReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0; /* hidden until revealed */
+}
+
+/* Fallback generic reveal */
+.reveal.visible .js-plotly-plot {
+  animation: chartReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes chartReveal {
-  from {
-    opacity: 0;
-    transform: scale(0.98);
-  }
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
 
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+/* 1. Risk Distribution (Pie/Donut) — Conic gradient circular wipe */
+@property --wipe-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes circularReveal {
+  from { --wipe-angle: 0deg; }
+  to { --wipe-angle: 360deg; }
+}
+.reveal.visible #risk_dist .js-plotly-plot {
+  -webkit-mask-image: conic-gradient(white var(--wipe-angle), transparent var(--wipe-angle));
+  mask-image: conic-gradient(white var(--wipe-angle), transparent var(--wipe-angle));
+  animation: circularReveal 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  opacity: 1;
+}
+
+/* 2. YoY Comparison (Vertical Bars) — Grow up from bottom */
+@keyframes barGrowUp {
+  from { clip-path: inset(100% 0 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+.reveal.visible #yoy .js-plotly-plot {
+  clip-path: inset(100% 0 0 0);
+  animation: barGrowUp 1s cubic-bezier(0.2, 1, 0.3, 1) forwards !important;
+  opacity: 1;
+}
+
+/* 3. Feature Importance (Horizontal Bars) — Swipe from left */
+@keyframes barSwipeRight {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+.reveal.visible #feature_importance .js-plotly-plot {
+  clip-path: inset(0 100% 0 0);
+  animation: barSwipeRight 1s cubic-bezier(0.2, 1, 0.3, 1) forwards !important;
+  opacity: 1;
+}
+
+/* 4. Timeline (Line) — Swipe horizontally */
+@keyframes timelineReveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+.reveal.visible #timeline .js-plotly-plot {
+  clip-path: inset(0 100% 0 0);
+  animation: timelineReveal 1.5s cubic-bezier(0.25, 1, 0.2, 1) forwards !important;
+  opacity: 1;
+}
+
+/* 5. Scatter Plot — Scale points up gracefully */
+@keyframes scatterReveal {
+  from { opacity: 0; transform: translateY(20px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.reveal.visible #scatter .js-plotly-plot {
+  animation: scatterReveal 1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards !important;
+}
+
+/* 6. Heatmap — Cinematic fade blur */
+@keyframes heatmapReveal {
+  from { opacity: 0; filter: blur(10px); transform: scale(1.02); }
+  to { opacity: 1; filter: blur(0); transform: scale(1); }
+}
+.reveal.visible #heatmap .js-plotly-plot {
+  animation: heatmapReveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
 }
 
 /* ── INSIGHTS SECTION ───────────────────────────────────────── */

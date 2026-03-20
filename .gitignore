@@ -1,33 +1,7 @@
-# ── Secrets ──────────────────────────────────────────────────────────
 .env
-
-# ── Large video file (source asset, not needed to run the app) ──────
-*.mp4
-
-# ── Python cache ──────────────────────────────────────────────────────
 __pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
-*.egg
-
-# ── Virtual environments ───────────────────────────────────────────────
-venv/
-.venv/
-env/
-ENV/
-
-# ── macOS ──────────────────────────────────────────────────────────────
+*.ipynb
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# ── IDE ────────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
+*.mp4
+final_flood_predictions (2).csv
+flood_predictions.csv

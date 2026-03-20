@@ -19,15 +19,20 @@ load_dotenv()
 # ── Gemini Configuration ──────────────────────────────────────────
 # Set your API key in environment variable 'GEMINI_API_KEY'
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+AVAILABLE_MODELS = []
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                AVAILABLE_MODELS.append(m.name)
+        print(f"Gemini API configured. Found {len(AVAILABLE_MODELS)} generative models available.")
     except Exception as e:
         print(f"Gemini Configuration Error: {e}")
 else:
     print("Gemini API Key missing. AI insights will use fallback logic.")
 
-# ── Palette & Layout ──────────────────────────────────────────────
+# ── Palette ───────────────────────────────────────────────────────
 BG       = "#0f1117"
 CARD_BG  = "#1a1d27"
 BORDER   = "#2a2d3e"
@@ -35,32 +40,25 @@ ACCENT   = "#4f8ef7"
 RED      = "#ef4444"
 AMBER    = "#f59e0b"
 GREEN    = "#10b981"
-BLUE     = "#3b82f6"
 TEXT     = "#e2e8f0"
 SUBTEXT  = "#94a3b8"
 
-# Plotly specific colors (for charts)
-CARD_PLOT  = "#0d0d0d"
-BORDER_PLT = "#1e1e1e"
-TEXT_PLT   = "#f5f5f7"
-SUB_PLT    = "#6e6e73"
-
+# Base layout (NO xaxis/yaxis — those are overridden per chart to avoid
+# "got multiple values for keyword argument" TypeError when spreading **CHART_LAYOUT)
 CHART_LAYOUT = dict(
-    paper_bgcolor=CARD_PLOT,
-    font=dict(color=TEXT_PLT, family="Inter, -apple-system, sans-serif", size=12),
-    title_font=dict(size=14, color=TEXT_PLT),
+    paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+    font=dict(color=TEXT, family="Inter, sans-serif", size=12),
+    title_font=dict(size=14, color=TEXT),
     margin=dict(t=48, b=36, l=48, r=16),
-    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUB_PLT))
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUBTEXT))
 )
 
-AXIS = dict(gridcolor=BORDER_PLT, zerolinecolor=BORDER_PLT, color=SUB_PLT)
+# Axis defaults reused in each chart
+AXIS = dict(gridcolor=BORDER, zerolinecolor=BORDER, color=TEXT)
 
 def L(**overrides):
-    # Corrected title format to use dict(text=...) for better Plotly compatibility
-    l = {**CHART_LAYOUT, **overrides}
-    if "title" in l and isinstance(l["title"], str):
-        l["title"] = dict(text=l["title"])
-    return l
+    """Merge CHART_LAYOUT with per-chart overrides safely."""
+    return {**CHART_LAYOUT, **overrides}
 
 
 MONTH_NAMES = {
@@ -70,35 +68,22 @@ MONTH_NAMES = {
 MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 
 # ── Load Data ─────────────────────────────────────────────────────
-df  = pd.read_csv("flood_predictions.csv")
-# Cleanly load data and delete large intermediate objects immediately to save RAM
+df  = pd.read_csv("final_flood_predictions_v2.csv")
 raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
+
 raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
 gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
 
-# Forces integers for date matching
-df["year"]   = df["year"].fillna(0).astype(int)
-df["month"]  = df["month"].fillna(0).astype(int)
-gdf["year"]  = gdf["year"].fillna(0).astype(int)
-gdf["month"] = gdf["month"].fillna(0).astype(int)
+df["year"]   = df["year"].astype(int)
+df["month"]  = df["month"].astype(int)
+gdf["year"]  = gdf["year"].astype(int)
+gdf["month"] = gdf["month"].astype(int)
 
-# Use strings for grid_id to ensure perfect matching
 df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-# ── PRE-GENERATE STATIC GEOJSON ───────────────
-static_gdf = gdf.drop_duplicates("grid_id").copy()
-static_gdf["id"] = static_gdf["grid_id"]
-STATIC_GEOJSON = json.loads(static_gdf.to_json())
-
-# DELETE large geospatial objects to free 200MB+ RAM before Dash starts
-del raw
-del gdf
-del static_gdf
-import gc
-gc.collect()
-
-print(f"[INFO] Dataset loaded: {len(df)} rows. Memory cleaned.")
+geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
+print(f"[INFO] geo_df rows: {len(geo_df)}")
 
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
@@ -106,14 +91,31 @@ FEATURES = ["rainfall", "soil_moisture", "elevation",
 YEARS  = sorted(df.year.unique())
 MONTHS = sorted(df.month.unique())
 
-# (All shared constants & L() moved to top of file)
+# ── Palette (used in Plotly charts only) ──────────────────────────
+CHART_BG   = "rgba(0,0,0,0)"
+CARD_PLOT  = "#0d0d0d"
+BORDER_PLT = "#1e1e1e"
+TEXT_PLT   = "#f5f5f7"
+SUB_PLT    = "#6e6e73"
+AMBER      = "#f0a842"
+RED        = "#ef4444"
+GREEN      = "#10b981"
+BLUE       = "#3b82f6"
+
+CHART_LAYOUT = dict(
+    paper_bgcolor=CARD_PLOT, plot_bgcolor=CARD_PLOT,
+    font=dict(color=TEXT_PLT, family="Inter, -apple-system, sans-serif", size=12),
+    title_font=dict(size=13, color=TEXT_PLT, family="Inter"),
+    margin=dict(t=44, b=32, l=44, r=16),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=SUB_PLT))
+)
+AXIS = dict(gridcolor=BORDER_PLT, zerolinecolor=BORDER_PLT, color=SUB_PLT)
+
+def L(**overrides):
+    return {**CHART_LAYOUT, **overrides}
 
 # ── App ────────────────────────────────────────────────────────────
-app = dash.Dash(
-    __name__,
-    serve_locally=True  # Forces Dash to serve Plotly.js from the server instead of a CDN
-)
-server = app.server
+app = dash.Dash(__name__)
 
 app.index_string = '''
 <!DOCTYPE html>
@@ -466,11 +468,96 @@ app.index_string = '''
         }
       });
 
+      /* ── KPI Count Up Animation ── */
+      function animateValue(obj, start, end, duration, formatStr) {
+        let startTimestamp = null;
+        const step = (timestamp) => {
+          if (!startTimestamp) startTimestamp = timestamp;
+          const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+          // Ease out
+          const ease = 1 - Math.pow(1 - progress, 4);
+          let current = start + ease * (end - start);
+          
+          if (formatStr.includes('%')) {
+            obj.innerHTML = current.toFixed(1) + '%';
+          } else {
+            obj.innerHTML = Math.round(current).toLocaleString('en-US');
+          }
+          
+          if (progress < 1) {
+            window.requestAnimationFrame(step);
+          } else {
+            obj.innerHTML = formatStr; // ensure exact final string is set
+          }
+        };
+        window.requestAnimationFrame(step);
+      }
+
+      function initCountUp() {
+        const triggerAnim = (target) => {
+          if (target.dataset.animating === 'true') return;
+          const text = target.innerHTML;
+          if (text.trim() === '—' || text.trim() === 'ML') return;
+          
+          let endVal = parseFloat(text.replace(/,/g, '').replace('%', ''));
+          if (!isNaN(endVal)) {
+            target.dataset.animating = 'true';
+            target.dataset.renderedText = text.trim(); 
+            animateValue(target, 0, endVal, 1500, text.trim());
+            setTimeout(() => { delete target.dataset.animating; }, 1600);
+          }
+        };
+
+        const intObs = new IntersectionObserver((entries) => {
+          entries.forEach(e => {
+            if (e.isIntersecting) {
+              const target = e.target;
+              const text = target.innerHTML.trim();
+              if (target.dataset.renderedText !== text && text !== '—' && text !== 'ML' && !target.dataset.animating) {
+                triggerAnim(target);
+              }
+            }
+          });
+        }, { threshold: 0.1 });
+
+        // Initial observe
+        document.querySelectorAll('.stat-num, .kpi-value').forEach(el => intObs.observe(el));
+
+        const mutObs = new MutationObserver((mutations) => {
+          let targetsToAnimate = new Set();
+          mutations.forEach((mutation) => {
+            let target = mutation.target;
+            // If it's a text node change, use the parent element
+            if (mutation.type === 'characterData') {
+              target = target.parentElement;
+            }
+            if (target && target.classList && (target.classList.contains('kpi-value') || target.classList.contains('stat-num'))) {
+              if (target.dataset.animating === 'true') return; // ignore animation's own DOM updates
+              targetsToAnimate.add(target);
+            }
+          });
+
+          targetsToAnimate.forEach(target => {
+            const rect = target.getBoundingClientRect();
+            const inView = (rect.top < window.innerHeight && rect.bottom >= 0);
+            if (inView) {
+              triggerAnim(target);
+            } else {
+              target.dataset.renderedText = '';
+              intObs.observe(target);
+            }
+          });
+        });
+
+        mutObs.observe(document.body, { childList: true, characterData: true, subtree: true });
+      }
+
       /* ── Init ── */
       function init() {
         initCanvas();
         initReveals();
         initTilt();
+        initCountUp();
       }
 
       setTimeout(init, 500);
@@ -573,8 +660,9 @@ app.layout = html.Div(children=[
     html.Section(id="kpi-section", children=[
         html.Div(className="kpi-row", children=[
             kpi_card("Avg Flood Probability", "kpi-avg",  AMBER, "📊", "kpi-amber"),
-            kpi_card("High-Risk Zones",       "kpi-high", RED,   "⚠️", "kpi-red"),
-            kpi_card("Medium-Risk Zones",     "kpi-med",  BLUE,  "📈", "kpi-blue"),
+            kpi_card("Extreme-Risk Zones",    "kpi-extreme", RED, "🚨", "kpi-red"),
+            kpi_card("High-Risk Zones",       "kpi-high", AMBER,   "⚠️", "kpi-amber"),
+            kpi_card("Moderate-Risk Zones",   "kpi-mod",  BLUE,  "📈", "kpi-blue"),
             kpi_card("Low-Risk Zones",        "kpi-low",  GREEN, "✅", "kpi-green"),
         ])
     ]),
@@ -645,10 +733,12 @@ app.layout = html.Div(children=[
 
             # ── Timeline + YoY ──────────────────────────────────────
             html.Div(className="chart-grid chart-grid-2", children=[
-                chart_card("Monthly Flood Probability",
-                    dcc.Graph(id="timeline", style={"height":"320px"},
-                              config={"displayModeBar": False})
-                ),
+                html.Div(className="reveal", children=[
+                    chart_card("Monthly Flood Probability",
+                        dcc.Graph(id="timeline", style={"height":"320px"},
+                                  config={"displayModeBar": False})
+                    )
+                ]),
                 html.Div(className="reveal reveal-delay-1", children=[
                     chart_card("Year-over-Year Comparison",
                         dcc.Graph(id="yoy", style={"height":"320px"},
@@ -659,10 +749,12 @@ app.layout = html.Div(children=[
 
             # ── Scatter + Heatmap ────────────────────────────────────
             html.Div(className="chart-grid chart-grid-3-2", style={"marginTop":"16px"}, children=[
-                chart_card("Rainfall vs Flood Probability",
-                    dcc.Graph(id="scatter", style={"height":"320px"},
-                              config={"displayModeBar": False})
-                ),
+                html.Div(className="reveal", children=[
+                    chart_card("Rainfall vs Flood Probability",
+                        dcc.Graph(id="scatter", style={"height":"320px"},
+                                  config={"displayModeBar": False})
+                    )
+                ]),
                 html.Div(className="reveal reveal-delay-2", children=[
                     chart_card("Historical Risk Heatmap  (Month × Year)",
                         dcc.Graph(id="heatmap", style={"height":"320px"},
@@ -673,10 +765,12 @@ app.layout = html.Div(children=[
 
             # ── Feature bars + Risk donut ────────────────────────────
             html.Div(className="chart-grid chart-grid-feat", style={"marginTop":"16px"}, children=[
-                chart_card("Feature Comparison  (0–1 Normalised)",
-                    dcc.Graph(id="feature_importance", style={"height":"320px"},
-                              config={"displayModeBar": False})
-                ),
+                html.Div(className="reveal", children=[
+                    chart_card("Feature Comparison  (0–1 Normalised)",
+                        dcc.Graph(id="feature_importance", style={"height":"320px"},
+                                  config={"displayModeBar": False})
+                    )
+                ]),
                 html.Div(className="reveal reveal-delay-1", children=[
                     chart_card("Risk-Level Distribution",
                         dcc.Graph(id="risk_dist", style={"height":"320px"},
@@ -721,10 +815,12 @@ app.layout = html.Div(children=[
                     "fontFamily": "Inter, sans-serif"
                 },
                 style_data_conditional=[
-                    {"if": {"filter_query": '{flood_probability} > "0.70"'},
+                    {"if": {"filter_query": '{flood_probability} > "0.75"'},
                      "color": RED, "fontWeight": "600"},
-                    {"if": {"filter_query": '{flood_probability} > "0.40" && {flood_probability} <= "0.70"'},
+                    {"if": {"filter_query": '{flood_probability} > "0.50" && {flood_probability} <= "0.75"'},
                      "color": AMBER},
+                    {"if": {"filter_query": '{flood_probability} > "0.25" && {flood_probability} <= "0.50"'},
+                     "color": BLUE},
                     {"if": {"row_index": "even"},
                      "backgroundColor": "#050505"},
                 ],
@@ -748,10 +844,11 @@ app.layout = html.Div(children=[
 
 # KPI values
 @app.callback(
-    Output("kpi-avg",  "children"),
-    Output("kpi-high", "children"),
-    Output("kpi-med",  "children"),
-    Output("kpi-low",  "children"),
+    Output("kpi-avg",     "children"),
+    Output("kpi-extreme", "children"),
+    Output("kpi-high",    "children"),
+    Output("kpi-mod",     "children"),
+    Output("kpi-low",     "children"),
     Input("year",  "value"),
     Input("month", "value")
 )
@@ -759,12 +856,13 @@ def update_kpis(year, month):
     year, month = int(year), int(month)
     dff = df[(df.year == year) & (df.month == month)]
     if dff.empty:
-        return "—", "—", "—", "—"
-    avg_prob  = dff["flood_probability"].mean()
-    high_risk = (dff["flood_probability"] > 0.7).sum()
-    med_risk  = ((dff["flood_probability"] >= 0.4) & (dff["flood_probability"] <= 0.7)).sum()
-    low_risk  = (dff["flood_probability"] < 0.4).sum()
-    return f"{avg_prob:.1%}", f"{int(high_risk):,}", f"{int(med_risk):,}", f"{int(low_risk):,}"
+        return "—", "—", "—", "—", "—"
+    avg_prob     = dff["flood_probability"].mean()
+    extreme_risk = (dff["flood_probability"] > 0.75).sum()
+    high_risk    = ((dff["flood_probability"] > 0.5) & (dff["flood_probability"] <= 0.75)).sum()
+    mod_risk     = ((dff["flood_probability"] >= 0.25) & (dff["flood_probability"] <= 0.5)).sum()
+    low_risk     = (dff["flood_probability"] < 0.25).sum()
+    return f"{avg_prob:.1%}", f"{int(extreme_risk):,}", f"{int(high_risk):,}", f"{int(mod_risk):,}", f"{int(low_risk):,}"
 
 
 # Flood map
@@ -774,44 +872,36 @@ def update_kpis(year, month):
     Input("month", "value")
 )
 def update_map(year, month):
-    try:
-        year, month = int(year), int(month)
-        dff = df[(df.year == year) & (df.month == month)].copy()
-        if dff.empty:
-            return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                                         font=dict(color=TEXT), title="No data for this selection"))
+    year, month = int(year), int(month)
+    dff = geo_df[(geo_df.year == year) & (geo_df.month == month)].reset_index(drop=True)
+    if dff.empty:
+        return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                                     font=dict(color=TEXT)))
 
-        fig = px.choropleth_mapbox(
-            dff, geojson=STATIC_GEOJSON, locations="grid_id",
-            color="flood_probability", featureidkey="id",
-            mapbox_style="carto-darkmatter",
-            center={"lat": 16.7, "lon": 82.0}, zoom=8,
-            opacity=0.8,
-            color_continuous_scale="YlOrRd",
-            range_color=[0, 1],
-            hover_data={"flood_probability": ":.2%",
-                        "rainfall": ":.1f", "elevation": ":.1f"}
+    geojson = json.loads(dff.to_json())
+    fig = px.choropleth_mapbox(
+        dff, geojson=geojson, locations=dff.index,
+        color="flood_probability", featureidkey="id",
+        mapbox_style="carto-darkmatter",
+        center={"lat": 16.7, "lon": 82.0}, zoom=8,
+        opacity=0.8,
+        color_continuous_scale="YlOrRd",
+        range_color=[0, 1],
+        hover_data={"flood_probability": ":.2%",
+                    "rainfall_x": ":.1f", "elevation_x": ":.1f"}
+    )
+    fig.update_layout(
+        margin={"r":0,"t":0,"l":0,"b":0},
+        paper_bgcolor=CARD_BG,
+        coloraxis_colorbar=dict(
+            title="Flood Prob.",
+            tickformat=".0%",
+            bgcolor=CARD_BG,
+            tickfont=dict(color=TEXT),
+            titlefont=dict(color=TEXT)
         )
-        fig.update_layout(
-            margin=dict(l=0, r=0, t=0, b=0),
-            paper_bgcolor=CARD_PLOT,
-            coloraxis=dict(
-                colorbar=dict(
-                    title=dict(text="Flood Prob.", font=dict(color=TEXT_PLT)),
-                    tickformat=".0%",
-                    tickfont=dict(color=TEXT_PLT)
-                )
-            )
-        )
-        return fig
-    except Exception as e:
-        import traceback
-        err = traceback.format_exc()
-        print(f"Map Error:\n{err}")
-        return go.Figure(layout=dict(
-            paper_bgcolor=CARD_PLOT,
-            font=dict(color=TEXT_PLT), title=dict(text=f"Map Error: {str(e)[:40]}")
-        ))
+    )
+    return fig
 
 
 # Monthly timeline
@@ -898,37 +988,34 @@ def update_yoy(year, month):
     Input("month", "value")
 )
 def update_scatter(year, month):
-    try:
-        year, month = int(year), int(month)
-        dff = df[(df.year == year) & (df.month == month)].copy()
-        if dff.empty:
-            return go.Figure(layout=L(title="No data available for this selection"))
+    year, month = int(year), int(month)
+    dff = df[(df.year == year) & (df.month == month)].copy()
+    if dff.empty:
+        return go.Figure(layout=L(title="No data"))
 
-        bins   = [0, 0.4, 0.7, 1.0]
-        labels = ["Low", "Medium", "High"]
-        dff["risk"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
+    bins   = [0, 0.25, 0.5, 0.75, 1]
+    labels = ['Low', 'Moderate', 'High', 'Extreme']
+    # astype(str) avoids Categorical dtype crashing plotly trendline grouping
+    dff["risk"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
 
-        color_map = {"Low": GREEN, "Medium": AMBER, "High": RED}
+    color_map = {"Low": GREEN, "Moderate": BLUE, "High": AMBER, "Extreme": RED}
 
-        fig = px.scatter(
-            dff, x="rainfall", y="flood_probability",
-            color="risk", color_discrete_map=color_map,
-            opacity=0.55, size_max=6,
-            labels={"rainfall": "Rainfall (mm)", "flood_probability": "Flood Probability",
-                    "risk": "Risk Level"},
-            trendline="lowess", trendline_scope="overall",
-            trendline_color_override=ACCENT
-        )
-        mn = MONTH_NAMES.get(month, str(month))
-        fig.update_layout(**L(
-            yaxis=dict(tickformat=".0%", **AXIS),
-            xaxis=AXIS,
-            title=f"Rainfall vs Risk — {mn} {year}"
-        ))
-        return fig
-    except Exception as e:
-        print(f"Scatter Plot Error: {e}")
-        return go.Figure(layout=L(title=f"Error loading scatter plot"))
+    fig = px.scatter(
+        dff, x="rainfall", y="flood_probability",
+        color="risk", color_discrete_map=color_map,
+        opacity=0.55, size_max=6,
+        labels={"rainfall": "Rainfall (mm)", "flood_probability": "Flood Probability",
+                "risk": "Risk Level"},
+        trendline="lowess", trendline_scope="overall",
+        trendline_color_override=ACCENT
+    )
+    mn = MONTH_NAMES.get(month, str(month))
+    fig.update_layout(**L(
+        yaxis=dict(tickformat=".0%", **AXIS),
+        xaxis=AXIS,
+        title=f"Rainfall vs Risk — {mn} {year}"
+    ))
+    return fig
 
 
 # Calendar heatmap
@@ -938,63 +1025,48 @@ def update_scatter(year, month):
     Input("month", "value")
 )
 def update_heatmap(year, month):
-    try:
-        year, month = int(year), int(month)
-        # Pre-sum/mean to reduce memory during pivot
-        agg_df = df.groupby(["year","month"])["flood_probability"].mean().reset_index()
-        if agg_df.empty:
-            return go.Figure(layout=L(title="No historical data available"))
+    year, month = int(year), int(month)
+    pivot = (df.groupby(["year","month"])["flood_probability"]
+               .mean()
+               .reset_index()
+               .pivot(index="month", columns="year", values="flood_probability"))
+    pivot.index = [MONTH_NAMES[m] for m in pivot.index]
+    pivot = pivot.reindex(MONTH_ORDER)
 
-        pivot = agg_df.pivot(index="month", columns="year", values="flood_probability")
-        
-        # Map indices to names - cast to int first to ensure dictionary match
-        pivot.index = [MONTH_NAMES.get(int(m), str(m)) for m in pivot.index]
-        pivot = pivot.reindex(MONTH_ORDER)
+    fig = go.Figure(go.Heatmap(
+        z=pivot.values,
+        x=[str(c) for c in pivot.columns],
+        y=pivot.index,
+        colorscale="YlOrRd",
+        zmin=0, zmax=1,
+        text=[[f"{v:.0%}" if not pd.isna(v) else "" for v in row] for row in pivot.values],
+        texttemplate="%{text}",
+        textfont=dict(size=10, color="black"),  # Black text for better contrast on yellow/orange
+        hovertemplate="Year: %{x}<br>Month: %{y}<br>Avg Risk: %{z:.2%}<extra></extra>",
+        colorbar=dict(
+            tickformat=".0%", bgcolor="rgba(0,0,0,0)",
+            tickfont=dict(color=TEXT_PLT), titlefont=dict(color=TEXT_PLT), title="Risk"
+        )
+    ))
 
-        fig = go.Figure(go.Heatmap(
-            z=pivot.values,
-            x=[str(c) for c in pivot.columns],
-            y=pivot.index,
-            colorscale="YlOrRd",
-            zmin=0, zmax=1,
-            text=[[f"{v:.0%}" if not pd.isna(v) else "" for v in row] for row in pivot.values],
-            texttemplate="%{text}",
-            textfont=dict(size=10, color="black"),
-            hovertemplate="Year: %{x}<br>Month: %{y}<br>Avg Risk: %{z:.2%}<extra></extra>",
-            colorbar=dict(
-                tickformat=".0%", bgcolor="rgba(0,0,0,0)",
-                tickfont=dict(color=TEXT_PLT), titlefont=dict(color=TEXT_PLT), title="Risk"
-            )
-        ))
+    # Highlight selected cell with a rectangle shape
+    if str(year) in [str(c) for c in pivot.columns] and MONTH_NAMES.get(month) in pivot.index:
+        x_idx = [str(c) for c in pivot.columns].index(str(year))
+        y_idx = list(pivot.index).index(MONTH_NAMES[month])
+        fig.add_shape(
+            type="rect",
+            xref="x", yref="y",
+            x0=x_idx - 0.5, x1=x_idx + 0.5,
+            y0=y_idx - 0.5, y1=y_idx + 0.5,
+            line=dict(color=ACCENT, width=3)
+        )
 
-        # Highlight selected cell safely
-        mn_label = MONTH_NAMES.get(month)
-        years_list = [str(c) for c in pivot.columns]
-        if mn_label in pivot.index and str(year) in years_list:
-            x_idx = years_list.index(str(year))
-            y_idx = list(pivot.index).index(mn_label)
-            fig.add_shape(
-                type="rect",
-                xref="x", yref="y",
-                x0=x_idx - 0.5, x1=x_idx + 0.5,
-                y0=y_idx - 0.5, y1=y_idx + 0.5,
-                line=dict(color=ACCENT, width=3)
-            )
-
-        fig.update_layout(**L(
-            title="Historical Risk Heatmap",
-            xaxis=dict(side="bottom", **AXIS),
-            yaxis=dict(autorange="reversed", **AXIS)
-        ))
-        return fig
-    except Exception as e:
-        import traceback
-        err = traceback.format_exc()
-        print(f"Heatmap Error:\n{err}")
-        return go.Figure(layout=dict(
-            paper_bgcolor=CARD_PLOT,
-            font=dict(color=TEXT_PLT), title=dict(text=f"Heatmap Error: {str(e)[:40]}")
-        ))
+    fig.update_layout(**L(
+        title="Historical Risk Heatmap",
+        xaxis=dict(side="bottom", **AXIS),
+        yaxis=dict(autorange="reversed", **AXIS)
+    ))
+    return fig
 
 
 # Feature importance bar
@@ -1053,15 +1125,15 @@ def update_risk_dist(year, month):
     if dff.empty:
         return go.Figure(layout=L(title="No data"))
 
-    bins   = [0, 0.4, 0.7, 1.0]
-    labels = ["Low (<40%)", "Medium (40–70%)", "High (>70%)"]
+    bins   = [0, 0.25, 0.5, 0.75, 1]
+    labels = ["Low (<25%)", "Moderate (25–50%)", "High (50–75%)", "Extreme (>75%)"]
     dff["risk_level"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
     counts = dff["risk_level"].value_counts().reindex(labels, fill_value=0)
 
     fig = go.Figure(go.Pie(
         labels=counts.index, values=counts.values,
         hole=0.6,
-        marker=dict(colors=[GREEN, BLUE, RED],
+        marker=dict(colors=[GREEN, BLUE, AMBER, RED],
                     line=dict(color="#000", width=2)),
         textinfo="percent",
         textfont=dict(size=12, color=TEXT),
@@ -1089,8 +1161,14 @@ def update_table(year, month):
     if dff.empty:
         return [], []
 
-    show_cols  = ["grid_id", "flood_probability", "rainfall",
+    show_cols  = ["grid_id", "risk_level", "flood_probability", "rainfall",
                   "soil_moisture", "elevation", "river_distance"]
+                  
+    # Calculate Risk Level specifically for the table before taking top 15
+    bins   = [0, 0.25, 0.5, 0.75, 1]
+    labels = ["Low", "Moderate", "High", "Extreme"]
+    dff["risk_level"] = pd.cut(dff["flood_probability"], bins=bins, labels=labels, include_lowest=True).astype(str)
+    
     available  = [c for c in show_cols if c in dff.columns]
     top15      = dff.nlargest(15, "flood_probability")[available].copy()
 
@@ -1101,6 +1179,7 @@ def update_table(year, month):
 
     rename = {
         "grid_id":          "Grid ID",
+        "risk_level":       "Classification",
         "flood_probability":"Flood Prob.",
         "rainfall":         "Rainfall (mm)",
         "soil_moisture":    "Soil Moisture",
@@ -1141,9 +1220,12 @@ def update_insights(year, month):
         comparison_text = f"{abs(diff):.1%} {direction} vs {mn} {year-1}"
 
     # Use Gemini with multi-model fallback
-    if GEMINI_API_KEY:
-        # Try models in order of speed/availability (matching user's diagnostic)
-        for model_name in ["models/gemini-2.0-flash", "models/gemini-flash-latest", "models/gemini-pro-latest", "models/gemini-pro"]:
+    if GEMINI_API_KEY and AVAILABLE_MODELS:
+        # Dynamically prefer fast 'flash' models if available, otherwise fallback to any model
+        flash_models = [m for m in AVAILABLE_MODELS if 'flash' in m.lower() and 'lite' not in m.lower() and 'preview' not in m.lower()]
+        models_to_try = flash_models if flash_models else AVAILABLE_MODELS
+        
+        for model_name in models_to_try:
             try:
                 temp_model = genai.GenerativeModel(model_name)
                 prompt = f"""
