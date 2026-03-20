@@ -6,3 +6,4 @@ shapely
 google-generativeai
 python-dotenv
 gunicorn
+statsmodels
