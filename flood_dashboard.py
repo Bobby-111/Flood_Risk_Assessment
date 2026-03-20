@@ -1027,11 +1027,11 @@ def update_scatter(year, month):
 )
 def update_heatmap(year, month):
     year, month = int(year), int(month)
-    pivot = (df.groupby(["year","month"])["flood_probability"]
-               .mean()
-               .reset_index()
-               .pivot(index="month", columns="year", values="flood_probability"))
-    pivot.index = [MONTH_NAMES[m] for m in pivot.index]
+    grouped = df.groupby(["year","month"], as_index=False)["flood_probability"].mean()
+    pivot = grouped.pivot(index="month", columns="year", values="flood_probability")
+    
+    # Safely rename indices resolving Pandas mapping issues
+    pivot.index = pivot.index.map(lambda m: MONTH_NAMES.get(int(m), str(m)))
     pivot = pivot.reindex(MONTH_ORDER)
 
     fig = go.Figure(go.Heatmap(
