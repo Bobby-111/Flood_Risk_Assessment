@@ -5,3 +5,4 @@ plotly
 shapely
 google-generativeai
 python-dotenv
+gunicorn

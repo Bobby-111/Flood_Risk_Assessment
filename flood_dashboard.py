@@ -116,6 +116,7 @@ def L(**overrides):
 
 # ── App ────────────────────────────────────────────────────────────
 app = dash.Dash(__name__)
+server = app.server # Expose Flask WSGI server for Render/Gunicorn
 
 app.index_string = '''
 <!DOCTYPE html>
