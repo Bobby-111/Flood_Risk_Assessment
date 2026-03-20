@@ -69,21 +69,20 @@ MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 
 # ── Load Data ─────────────────────────────────────────────────────
 df  = pd.read_csv("final_flood_predictions_v2.csv")
-raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
 
-raw["geometry"] = raw[".geo"].apply(lambda x: shape(json.loads(x)))
-gdf = gpd.GeoDataFrame(raw, geometry="geometry").set_crs(epsg=4326)
+# Only process unique geometries (~538 grids) to save ~500MB RAM on Render
+raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv", usecols=["grid_id", ".geo"])
+unique_grids = raw.drop_duplicates(subset=["grid_id"]).copy()
+unique_grids["geometry"] = unique_grids[".geo"].apply(lambda x: shape(json.loads(x)))
+gdf = gpd.GeoDataFrame(unique_grids, geometry="geometry").set_crs(epsg=4326)
 
 df["year"]   = df["year"].astype(int)
 df["month"]  = df["month"].astype(int)
-gdf["year"]  = gdf["year"].astype(int)
-gdf["month"] = gdf["month"].astype(int)
 
 df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
 
-geo_df = gdf.merge(df, on=["grid_id", "year", "month"])
-print(f"[INFO] geo_df rows: {len(geo_df)}")
+print(f"[INFO] Unique spatial grids loaded: {len(gdf)}")
 
 FEATURES = ["rainfall", "soil_moisture", "elevation",
             "slope", "TWI", "HAND", "river_distance", "drainage_density"]
@@ -874,14 +873,17 @@ def update_kpis(year, month):
 )
 def update_map(year, month):
     year, month = int(year), int(month)
-    dff = geo_df[(geo_df.year == year) & (geo_df.month == month)].reset_index(drop=True)
+    dff = df[(df.year == year) & (df.month == month)].reset_index(drop=True)
     if dff.empty:
         return go.Figure(layout=dict(paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
                                      font=dict(color=TEXT)))
 
-    geojson = json.loads(dff.to_json())
+    # Merge lightweight geometries specifically for this month's frame
+    map_df = gdf.merge(dff, on="grid_id")
+
+    geojson = json.loads(map_df.to_json())
     fig = px.choropleth_mapbox(
-        dff, geojson=geojson, locations=dff.index,
+        map_df, geojson=geojson, locations=map_df.index,
         color="flood_probability", featureidkey="id",
         mapbox_style="carto-darkmatter",
         center={"lat": 16.7, "lon": 82.0}, zoom=8,
@@ -889,7 +891,7 @@ def update_map(year, month):
         color_continuous_scale="YlOrRd",
         range_color=[0, 1],
         hover_data={"flood_probability": ":.2%",
-                    "rainfall_x": ":.1f", "elevation_x": ":.1f"}
+                    "rainfall": ":.1f", "elevation": ":.1f"}
     )
     fig.update_layout(
         margin={"r":0,"t":0,"l":0,"b":0},
