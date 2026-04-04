@@ -3,6 +3,10 @@ pandas
 geopandas
 plotly
 shapely
+numpy
+scikit-learn==1.6.1
+joblib
+shap
 google-generativeai
 python-dotenv
 gunicorn

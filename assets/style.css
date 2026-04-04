@@ -683,6 +683,11 @@ body {
   display: none !important;
 }
 
+#flood_map .modebar,
+#comparison_map .modebar {
+  display: flex !important;
+}
+
 .js-plotly-plot {
   opacity: 0; /* hidden until revealed */
 }

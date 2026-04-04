@@ -1,6 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 import json
+import numpy as np
 from shapely.geometry import shape
 
 import dash
@@ -9,9 +10,21 @@ from dash.dependencies import Input, Output, State
 
 import plotly.express as px
 import plotly.graph_objects as go
+import shap
 import google.generativeai as genai
+import joblib
 import os
+import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dotenv import load_dotenv
+
+# Compatibility shim for older model pickles that reference NumPy's removed ComplexWarning.
+import numpy.core.numeric as _np_numeric
+if not hasattr(_np_numeric, "ComplexWarning"):
+  class ComplexWarning(RuntimeWarning):
+    pass
+
+  _np_numeric.ComplexWarning = ComplexWarning
 
 # Load API key from .env file
 load_dotenv()
@@ -19,6 +32,7 @@ load_dotenv()
 # ── Gemini Configuration ──────────────────────────────────────────
 # Set your API key in environment variable 'GEMINI_API_KEY'
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+USE_GEMINI_INSIGHTS = os.environ.get("USE_GEMINI_INSIGHTS", "0") == "1"
 AVAILABLE_MODELS = []
 if GEMINI_API_KEY:
     try:
@@ -67,8 +81,138 @@ MONTH_NAMES = {
 }
 MONTH_ORDER = [MONTH_NAMES[i] for i in range(1, 13)]
 
+# ── Prediction Pipeline ─────────────────────────────
+def preprocess_data(df, final_features):
+  df = df.copy()
+
+  if "grid_id" not in df.columns:
+    df["grid_id"] = "custom"
+  if "year" not in df.columns:
+    df["year"] = pd.Timestamp.now().year
+  if "month" not in df.columns:
+    df["month"] = pd.Timestamp.now().month
+
+  df["grid_id"] = df["grid_id"].astype(str)
+  df = df.sort_values(["grid_id", "year", "month"])
+
+  # Missing handling
+  df["rainfall"] = df["rainfall"].replace(0, np.nan)
+  df["soil_moisture"] = df["soil_moisture"].replace(0, np.nan)
+
+  df["rainfall"] = df["rainfall"].fillna(df["rainfall"].median())
+  df["soil_moisture"] = df["soil_moisture"].fillna(df["soil_moisture"].median())
+
+  # Lag features
+  df['rainfall_lag1'] = df.groupby('grid_id')['rainfall'].shift(1)
+  df['rainfall_lag2'] = df.groupby('grid_id')['rainfall'].shift(2)
+  df['soil_lag1'] = df.groupby('grid_id')['soil_moisture'].shift(1)
+
+  # Interactions
+  df['rainfall_x_slope'] = df['rainfall'] * (df['slope'] + 1)
+  df['rainfall_x_drainage'] = df['rainfall'] * df['drainage_density']
+  df['soil_x_TWI'] = df['soil_moisture'] * df['TWI']
+
+  # Ensure features exist
+  for feature in final_features:
+    if feature not in df.columns:
+      df[feature] = 0
+
+  df[final_features] = df[final_features].fillna(0)
+
+  return df
+
+
+def generate_predictions(df, model, scaler, final_features):
+  df = preprocess_data(df, final_features)
+
+  X = df[final_features]
+  X_scaled = scaler.transform(X)
+
+  df["flood_probability"] = model.predict_proba(X_scaled)[:, 1]
+
+  return df
+
+
+def explain_risk_record(record, df_month):
+  reasons = []
+
+  if record["rainfall"] > df_month["rainfall"].mean():
+    reasons.append("High rainfall")
+
+  if record["soil_moisture"] > df_month["soil_moisture"].mean():
+    reasons.append("High soil moisture")
+
+  if record["elevation"] < df_month["elevation"].mean():
+    reasons.append("Low elevation")
+
+  if record["river_distance"] < df_month["river_distance"].mean():
+    reasons.append("Close to river")
+
+  if record["drainage_density"] > df_month["drainage_density"].mean():
+    reasons.append("Dense drainage network")
+
+  if record["TWI"] > df_month["TWI"].mean():
+    reasons.append("High topographic wetness")
+
+  if not reasons:
+    reasons.append("Model features indicate elevated combined exposure")
+
+  return reasons
+
+
+def compare_prediction_actual(row):
+  if row["actual_label"] == 1 and row["predicted_label"] == 1:
+    return "Correct Flood"
+  if row["actual_label"] == 0 and row["predicted_label"] == 0:
+    return "Correct No Flood"
+  if row["actual_label"] == 1 and row["predicted_label"] == 0:
+    return "Missed Flood"
+  return "False Alarm"
+
 # ── Load Data ─────────────────────────────────────────────────────
-df  = pd.read_csv("final_flood_predictions_v2.csv")
+df = pd.read_csv("Flood_ML_Dataset_2015_2023.csv")
+
+# ── Load Trained Model ───────────────────────────────
+try:
+    model = joblib.load("best_flood_model_gbc.joblib")
+    scaler = joblib.load("scaler.pkl")
+    final_features = joblib.load("features.pkl")
+    MODEL_LOADED = True
+    print("[INFO] Best GBC model loaded successfully.")
+except Exception as e:
+    print(f"[WARNING] Model loading failed: {e}")
+    MODEL_LOADED = False
+
+# ── SHAP Explainer ─────────────────────────────
+try:
+  explainer = None
+  SHAP_READY = MODEL_LOADED
+  print("[INFO] SHAP initialized. Explainer will be prepared on demand.")
+except Exception as e:
+  explainer = None
+  SHAP_READY = False
+  print(f"[WARNING] SHAP not available: {e}")
+
+# ── Model Performance Metrics ───────────────────
+try:
+  metrics = joblib.load("metrics.pkl")
+except Exception as e:
+  metrics = None
+  print(f"[WARNING] Metrics not available: {e}")
+
+# ── Generate Predictions ─────────────────────────────
+if MODEL_LOADED:
+  try:
+    df = generate_predictions(df, model, scaler, final_features)
+    print("[INFO] Predictions generated using pipeline.")
+  except Exception as e:
+    print(f"[ERROR] Prediction failed: {e}")
+    MODEL_LOADED = False
+
+# ── Fallback to CSV (VERY IMPORTANT) ─────────────────
+if not MODEL_LOADED:
+    print("[INFO] Falling back to precomputed CSV.")
+    df = pd.read_csv("final_flood_predictions_v2.csv")
 
 # Only process unique geometries (~538 grids) to save ~500MB RAM on Render
 raw = pd.read_csv("Flood_ML_Dataset_2015_2023.csv", usecols=["grid_id", ".geo"])
@@ -81,6 +225,42 @@ df["month"]  = df["month"].astype(int)
 
 df["grid_id"]  = df["grid_id"].astype(str).str.replace(",", "", regex=False)
 gdf["grid_id"] = gdf["grid_id"].astype(str).str.replace(",", "", regex=False)
+
+if "flood_ratio" not in df.columns:
+  try:
+    actual_df = pd.read_csv(
+      "Flood_ML_Dataset_2015_2023.csv",
+      usecols=["grid_id", "year", "month", "flood_ratio"]
+    )
+    actual_df["grid_id"] = actual_df["grid_id"].astype(str).str.replace(",", "", regex=False)
+    actual_df["year"] = actual_df["year"].astype(int)
+    actual_df["month"] = actual_df["month"].astype(int)
+    df = df.merge(actual_df, on=["grid_id", "year", "month"], how="left")
+  except Exception as e:
+    print(f"[WARNING] Could not attach flood_ratio for validation: {e}")
+
+# ── Actual vs Predicted Validation Labels ────────────────────────
+if "flood_ratio" in df.columns:
+  valid_ratio = df["flood_ratio"].dropna()
+  if not valid_ratio.empty:
+    threshold = valid_ratio.quantile(0.85)
+    df["actual_label"] = (df["flood_ratio"] > threshold).astype(int)
+    if "flood_probability" in df.columns:
+      df["predicted_label"] = (df["flood_probability"] > 0.5).astype(int)
+      df["comparison"] = df.apply(compare_prediction_actual, axis=1)
+      overall_accuracy = (df["actual_label"] == df["predicted_label"]).mean()
+      print(f"[INFO] Model Accuracy: {overall_accuracy:.2%}")
+    else:
+      df["predicted_label"] = 0
+      df["comparison"] = "Unavailable"
+  else:
+    df["actual_label"] = 0
+    df["predicted_label"] = 0
+    df["comparison"] = "Unavailable"
+else:
+  df["actual_label"] = 0
+  df["predicted_label"] = 0
+  df["comparison"] = "Unavailable"
 
 print(f"[INFO] Unique spatial grids loaded: {len(gdf)}")
 
@@ -667,6 +847,12 @@ app.layout = html.Div(children=[
         ])
     ]),
 
+    html.Div(
+      id="alert_box",
+      className="chart-card reveal",
+      style={"margin": "12px auto", "maxWidth": "1400px", "fontWeight": "700"}
+    ),
+
     # ── Analyst Insights Section ────────────────────────────────────
     html.Section(id="insights-section", children=[
         chart_card("Executive Analyst Insights",
@@ -679,6 +865,16 @@ app.layout = html.Div(children=[
             icon="🔬",
             cls="reveal"
         ),
+      chart_card("Why This Region Is Risky",
+        html.Div(id="risk_reason", className="insights-text"),
+        icon="🧭",
+        cls="reveal reveal-delay-1"
+      ),
+      chart_card("Model Performance",
+        html.Div(id="model_performance", className="insights-text"),
+        icon="📐",
+        cls="reveal reveal-delay-2"
+      ),
     ]),
 
     # ── Controls bar (sticky) ────────────────────────────────────────
@@ -708,6 +904,18 @@ app.layout = html.Div(children=[
             ], id="btn-export", className="export-btn"),
             dcc.Download(id="download-dataframe-csv"),
         ])
+        ]),
+
+        html.Div(style={"maxWidth": "1400px", "margin": "0 auto 12px"}, children=[
+          chart_card("Real-Time Flood Prediction",
+            html.Div(className="controls-inputs", children=[
+              dcc.Input(id="input_rainfall", placeholder="Rainfall", type="number", style={"width": "160px", "color": "#000000", "backgroundColor": "#ffffff"}),
+              dcc.Input(id="input_soil", placeholder="Soil Moisture", type="number", style={"width": "160px", "color": "#000000", "backgroundColor": "#ffffff"}),
+              dcc.Input(id="input_elevation", placeholder="Elevation", type="number", style={"width": "160px", "color": "#000000", "backgroundColor": "#ffffff"}),
+              html.Button("Predict", id="predict_btn", className="export-btn"),
+            ]),
+            html.Div(id="prediction_output", className="insights-text", style={"marginTop": "10px"})
+          )
     ]),
 
     # ── Charts Section ───────────────────────────────────────────────
@@ -728,7 +936,22 @@ app.layout = html.Div(children=[
             html.Div(className="chart-card-full reveal", children=[
                 html.P("Spatial Flood Risk Map", className="chart-label"),
                 dcc.Graph(id="flood_map", style={"height":"520px"},
-                          config={"displayModeBar": False})
+                    config={"displayModeBar": True, "scrollZoom": True, "displaylogo": False})
+            ]),
+
+            html.Div(className="chart-grid chart-grid-2", style={"marginTop":"16px"}, children=[
+              html.Div(className="reveal", children=[
+                chart_card("Prediction vs Actual Flood Comparison",
+                  dcc.Graph(id="comparison_map", style={"height":"500px"},
+                        config={"displayModeBar": True, "scrollZoom": True, "displaylogo": False})
+                )
+              ]),
+              html.Div(className="reveal reveal-delay-1", children=[
+                chart_card("Prediction Performance Breakdown",
+                  dcc.Graph(id="accuracy_chart", style={"height":"500px"},
+                        config={"displayModeBar": False})
+                )
+              ])
             ]),
 
             # ── Timeline + YoY ──────────────────────────────────────
@@ -761,6 +984,13 @@ app.layout = html.Div(children=[
                                   config={"displayModeBar": False})
                     )
                 ])
+            ]),
+
+            html.Div(className="reveal", style={"marginTop":"16px"}, children=[
+              chart_card("Model Explainability (SHAP)",
+                dcc.Graph(id="shap_plot", style={"height":"350px"},
+                      config={"displayModeBar": False})
+              )
             ]),
 
             # ── Feature bars + Risk donut ────────────────────────────
@@ -865,6 +1095,67 @@ def update_kpis(year, month):
     return f"{avg_prob:.1%}", f"{int(extreme_risk):,}", f"{int(high_risk):,}", f"{int(mod_risk):,}", f"{int(low_risk):,}"
 
 
+@app.callback(
+    Output("alert_box", "children"),
+    Input("year", "value"),
+    Input("month", "value")
+)
+def flood_alert(year, month):
+    dff = df[(df.year == int(year)) & (df.month == int(month))]
+
+    if dff.empty:
+        return ""
+
+    high_risk = dff[dff["flood_probability"] > 0.75]
+
+    if len(high_risk) > 20:
+        return "HIGH FLOOD ALERT: Multiple extreme-risk zones detected!"
+    if len(high_risk) > 5:
+        return "Moderate Flood Risk: Stay alert"
+    return "Low Flood Risk"
+
+
+@app.callback(
+    Output("prediction_output", "children"),
+    Input("predict_btn", "n_clicks"),
+    State("input_rainfall", "value"),
+    State("input_soil", "value"),
+    State("input_elevation", "value")
+)
+def predict_custom(n_clicks, rainfall, soil, elevation):
+    if not n_clicks:
+        return ""
+
+    if not MODEL_LOADED:
+        return "Model unavailable in this session."
+
+    try:
+        input_data = pd.DataFrame([{
+            "rainfall": rainfall or 0,
+            "soil_moisture": soil or 0,
+            "elevation": elevation or 0,
+            "slope": 1,
+            "TWI": 1,
+            "HAND": 1,
+            "river_distance": 1,
+            "drainage_density": 1,
+            "grid_id": "custom",
+            "year": int(df["year"].max()) if "year" in df.columns else pd.Timestamp.now().year,
+            "month": int(df["month"].max()) if "month" in df.columns else pd.Timestamp.now().month,
+        }])
+
+        input_data = preprocess_data(input_data, final_features)
+
+        X = input_data[final_features]
+        X_scaled = scaler.transform(X)
+
+        prob = model.predict_proba(X_scaled)[0][1]
+
+        return f"Flood Probability: {prob:.2%}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
 # Flood map
 @app.callback(
     Output("flood_map", "figure"),
@@ -897,13 +1188,105 @@ def update_map(year, month):
         margin={"r":0,"t":0,"l":0,"b":0},
         paper_bgcolor=CARD_BG,
         coloraxis_colorbar=dict(
-            title="Flood Prob.",
+          title=dict(text="Flood Prob.", font=dict(color=TEXT)),
             tickformat=".0%",
             bgcolor=CARD_BG,
-            tickfont=dict(color=TEXT),
-            titlefont=dict(color=TEXT)
+          tickfont=dict(color=TEXT)
         )
     )
+    return fig
+
+
+@app.callback(
+    Output("comparison_map", "figure"),
+    Input("year", "value"),
+    Input("month", "value")
+)
+def update_comparison_map(year, month):
+    dff = df[(df.year == int(year)) & (df.month == int(month))]
+
+    if dff.empty:
+        return go.Figure(layout=L(title="No data"))
+
+    map_df = gdf.merge(dff, on="grid_id")
+
+    if map_df.empty or "comparison" not in map_df.columns:
+        return go.Figure(layout=L(title="Comparison unavailable"))
+
+    color_map = {
+        "Correct Flood": "green",
+        "Correct No Flood": "blue",
+        "Missed Flood": "red",
+        "False Alarm": "orange",
+        "Unavailable": "gray",
+    }
+
+    fig = px.choropleth_mapbox(
+        map_df,
+        geojson=json.loads(map_df.to_json()),
+        locations=map_df.index,
+        color="comparison",
+        color_discrete_map=color_map,
+        mapbox_style="carto-darkmatter",
+        center={"lat": 16.7, "lon": 82.0},
+        zoom=8,
+        opacity=0.85,
+        hover_data={
+            "comparison": True,
+            "flood_probability": ":.2%",
+            "flood_ratio": ":.3f",
+            "actual_label": True,
+            "predicted_label": True,
+        },
+    )
+
+    fig.update_layout(
+        title="Prediction vs Actual Comparison",
+        margin={"r": 0, "t": 48, "l": 0, "b": 0},
+        paper_bgcolor=CARD_BG,
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT)),
+    )
+
+    return fig
+
+
+@app.callback(
+    Output("accuracy_chart", "figure"),
+    Input("year", "value"),
+    Input("month", "value")
+)
+def accuracy_chart(year, month):
+    dff = df[(df.year == int(year)) & (df.month == int(month))]
+
+    if dff.empty or "comparison" not in dff.columns:
+        return go.Figure(layout=L(title="No data"))
+
+    order = ["Correct Flood", "Correct No Flood", "Missed Flood", "False Alarm", "Unavailable"]
+    counts = dff["comparison"].value_counts().reindex(order, fill_value=0)
+
+    bar_colors = {
+        "Correct Flood": GREEN,
+        "Correct No Flood": BLUE,
+        "Missed Flood": RED,
+        "False Alarm": AMBER,
+        "Unavailable": SUBTEXT,
+    }
+
+    fig = go.Figure(go.Bar(
+        x=counts.index,
+        y=counts.values,
+        marker_color=[bar_colors.get(k, ACCENT) for k in counts.index],
+        text=counts.values,
+        textposition="outside",
+    ))
+
+    fig.update_layout(**L(
+        title="Prediction Performance Breakdown",
+        xaxis=dict(**AXIS),
+        yaxis=dict(title="Grid Count", **AXIS),
+        showlegend=False,
+    ))
+
     return fig
 
 
@@ -1048,7 +1431,8 @@ def update_heatmap(year, month):
         hovertemplate="Year: %{x}<br>Month: %{y}<br>Avg Risk: %{z:.2%}<extra></extra>",
         colorbar=dict(
             tickformat=".0%", bgcolor="rgba(0,0,0,0)",
-            tickfont=dict(color=TEXT_PLT), titlefont=dict(color=TEXT_PLT), title="Risk"
+          tickfont=dict(color=TEXT_PLT),
+          title=dict(text="Risk", font=dict(color=TEXT_PLT))
         )
     ))
 
@@ -1222,11 +1606,12 @@ def update_insights(year, month):
         direction = "increase" if diff > 0 else "decrease"
         comparison_text = f"{abs(diff):.1%} {direction} vs {mn} {year-1}"
 
-    # Use Gemini with multi-model fallback
-    if GEMINI_API_KEY and AVAILABLE_MODELS:
-        # Dynamically prefer fast 'flash' models if available, otherwise fallback to any model
+    # Use Gemini with strict timeout to keep Dash callbacks responsive.
+    if USE_GEMINI_INSIGHTS and GEMINI_API_KEY and AVAILABLE_MODELS:
+        # Prefer one fast model; do not iterate many models in a callback.
         flash_models = [m for m in AVAILABLE_MODELS if 'flash' in m.lower() and 'lite' not in m.lower() and 'preview' not in m.lower()]
         models_to_try = flash_models if flash_models else AVAILABLE_MODELS
+        models_to_try = models_to_try[:1]
         
         for model_name in models_to_try:
             try:
@@ -1243,9 +1628,15 @@ def update_insights(year, month):
                 Focus on spatial risk and primary drivers. Use bolding for numbers.
                 Return ONLY the summary text in Markdown format.
                 """
-                response = temp_model.generate_content(prompt)
+                # Run remote call in worker thread with timeout to avoid server callback stalls.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(temp_model.generate_content, prompt)
+                    response = future.result(timeout=2.5)
                 if response and response.text:
                     return dcc.Markdown(response.text)
+            except TimeoutError:
+                print(f"Gemini {model_name} timed out; using local fallback.")
+                break
             except Exception as e:
                 # If it's a 404, we don't want to print the whole stack trace every time
                 error_msg = str(e)
@@ -1267,6 +1658,97 @@ def update_insights(year, month):
     high-saturation grid clusters where hydraulic values correlate most strongly.
     """
     return dcc.Markdown(markdown_text)
+
+
+@app.callback(
+    Output("risk_reason", "children"),
+    Input("year", "value"),
+    Input("month", "value")
+)
+def explain_risk(year, month):
+    year, month = int(year), int(month)
+    dff = df[(df.year == year) & (df.month == month)]
+
+    if dff.empty:
+        return "No data available"
+
+    high_risk = dff.nlargest(1, "flood_probability").iloc[0]
+    reasons = explain_risk_record(high_risk, dff)
+
+    return html.Div([
+        html.P(f"Highest Risk Grid: {high_risk['grid_id']}", className="insight-line"),
+        html.P(f"Flood Probability: {high_risk['flood_probability']:.2%}", className="insight-line"),
+        html.P("Main Causes:", className="insight-line"),
+        html.Ul([html.Li(reason) for reason in reasons], className="insight-list")
+    ])
+
+
+@app.callback(
+    Output("model_performance", "children"),
+    Input("year", "value"),
+    Input("month", "value")
+)
+def update_model_performance(year, month):
+    if not metrics:
+        return dcc.Markdown("Model performance metrics are unavailable.")
+
+    accuracy = metrics.get("accuracy")
+    roc_auc = metrics.get("roc_auc")
+
+    return html.Div([
+        html.P(f"Accuracy: {accuracy:.2f}" if accuracy is not None else "Accuracy: N/A", className="insight-line"),
+        html.P(f"ROC-AUC: {roc_auc:.2f}" if roc_auc is not None else "ROC-AUC: N/A", className="insight-line"),
+    ])
+
+
+@app.callback(
+    Output("shap_plot", "figure"),
+    Input("year", "value"),
+  Input("month", "value")
+)
+def update_shap(year, month):
+  year, month = int(year), int(month)
+  dff = df[(df.year == year) & (df.month == month)]
+
+  if dff.empty:
+    return go.Figure(layout=L(title="No data"))
+
+  # Fast, stable explainability proxy to avoid callback timeouts in single-worker Dash.
+  feature_list = final_features if "final_features" in globals() else FEATURES
+  cols = [f for f in feature_list if f in dff.columns]
+  if not cols or "flood_probability" not in dff.columns:
+    return go.Figure(layout=L(title="Explainability unavailable"))
+
+  dff_num = dff[cols + ["flood_probability"]].copy()
+  dff_num = dff_num.apply(pd.to_numeric, errors="coerce").fillna(0)
+  importance = dff_num[cols].corrwith(dff_num["flood_probability"]).abs().fillna(0)
+  importance = importance.sort_values(ascending=True)
+
+  if importance.empty or float(importance.max()) == 0.0:
+    fig = go.Figure(layout=L(title="Explainability unavailable for current selection"))
+    fig.add_annotation(
+      text="Not enough signal to compute feature impact",
+      xref="paper", yref="paper", x=0.5, y=0.5,
+      showarrow=False, font=dict(color=SUBTEXT, size=12)
+    )
+    return fig
+
+  fig = go.Figure(go.Bar(
+    x=importance.values,
+    y=importance.index,
+    orientation="h",
+    marker_color=ACCENT,
+    text=[f"{v:.2f}" for v in importance.values],
+    textposition="outside"
+  ))
+
+  fig.update_layout(**L(
+    title="Feature Contribution to Flood Prediction",
+    xaxis_title="Impact",
+    yaxis_title="Features"
+  ))
+
+  return fig
 
 
 # CSV Export
