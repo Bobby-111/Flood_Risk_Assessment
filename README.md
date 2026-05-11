@@ -1,10 +1,3 @@
-Here is the finalized README updated to include your official **Architecture** and **Workflow** diagrams!
-
-I have replaced the code-based (Mermaid) diagram with your actual uploaded images, placing them in a dedicated "System Architecture & Workflow" section so they stand out perfectly.
-
-You can copy and paste this directly into your `README.md` file. Just make sure `Architecture.png` and `workflow.png` are uploaded to the same folder as your README in your repository!
-
-```markdown
 # 🌊 Spatio-Temporal Flood Risk Prediction System
 
 ![Flood Risk Banner](https://placehold.co/1200x300/004d99/FFFFFF/png?text=Flood+Risk+Intelligence+System)
@@ -73,8 +66,12 @@ Our predictive engine was rigorously tested and calibrated to prioritize **Recal
 ---
 
 ## 📸 Dashboard Previews
+<img width="1440" height="729" alt="Screenshot 2026-05-11 at 6 28 40 AM" src="https://github.com/user-attachments/assets/780b6f37-91a8-47e3-8c80-888de50f4533" />
+<img width="1440" height="900" alt="Screenshot 2026-05-11 at 6 29 23 AM" src="https://github.com/user-attachments/assets/f7fe3807-6986-41a7-88b9-6364bdef5197" />
+<img width="1433" height="662" alt="Screenshot 2026-05-11 at 6 29 41 AM" src="https://github.com/user-attachments/assets/3081c4eb-386a-41db-9b01-7ae886db08c7" />
 
-*(Add your project screenshots here)*
+
+
 
 * **Left:** Interactive Choropleth Map highlighting mean predicted flood probability across geographical grids.
 * **Right:** SHAP Feature Importance, showing how rainfall lag and soil moisture drive the risk scoring.
@@ -85,9 +82,8 @@ Our predictive engine was rigorously tested and calibrated to prioritize **Recal
 
 1. **Clone the Repository**
 ```bash
-git clone [https://github.com/bharathchilaka18/Flood_Risk_Assessment.git](https://github.com/bharathchilaka18/Flood_Risk_Assessment.git)
+git clone [https://github.com/Bobby-111/Flood_Risk_Assessment.git](https://github.com/Bobby-111/Flood_Risk_Assessment.git)
 cd Flood_Risk_Assessment
-
 ```
 
 
@@ -109,7 +105,7 @@ earthengine authenticate
 
 4. **Run the Dashboard**
 ```bash
-python app/app.py
+python flood_dashboard.py
 
 ```
 
@@ -143,7 +139,4 @@ If you found this project useful in advancing AI for environmental intelligence:
 * 🤝 Contribute improvements or report issues
 
 **🌊 Building AI for a Safer, Climate-Resilient Future 🌊**
-
-```
-
-```
+**Live Link: https://huggingface.co/spaces/Bharathchilaka/Flood_Risk_Assessment**
